@@ -48,6 +48,11 @@ class Config:
         return self._config["flow"]["labs_base_url"]
 
     @property
+    def flow_labs_refresh_url(self) -> str:
+        """Google Labs refresh URL for ST refresh"""
+        return self._config["flow"]["labs_refresh_url"]
+
+    @property
     def flow_api_base_url(self) -> str:
         """Google AI Sandbox API base URL for generation"""
         return self._config["flow"]["api_base_url"]

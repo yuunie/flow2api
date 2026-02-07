@@ -5,6 +5,7 @@ admin_password = "admin"
 
 [flow]
 labs_base_url = "https://labs.google/fx/api"
+labs_refresh_url = "https://labs.google/fx/zh/tools/flow"
 api_base_url = "https://aisandbox-pa.googleapis.com/v1"
 timeout = 120
 poll_interval = 3.0

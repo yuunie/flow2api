@@ -559,6 +559,76 @@ class TokenManager:
                 # 重置错误计数
                 await self.db.reset_error_count(token.id)
 
+    async def auto_refresh_st_tokens(self):
+        """自动刷新即将过期或已过期 token 的 Session Token
+
+        规则:
+        - 仅处理已启用的 token
+        - AT 已过期或剩余时间少于 2 小时时触发刷新
+        - 通过请求 Flow 页面获取新的 ST
+        - 刷新成功后等待下次使用时自动刷新 AT
+        """
+        all_tokens = await self.db.get_all_tokens()
+        now = datetime.now(timezone.utc)
+
+        for token in all_tokens:
+            # 跳过未启用的 token
+            if not token.is_active:
+                continue
+
+            # 检查 AT 过期时间是否存在
+            if not token.at_expires:
+                continue
+
+            # 确保时区一致
+            if token.at_expires.tzinfo is None:
+                at_expires_aware = token.at_expires.replace(tzinfo=timezone.utc)
+            else:
+                at_expires_aware = token.at_expires
+
+            # 计算剩余时间（秒）
+            time_until_expiry = (at_expires_aware - now).total_seconds()
+
+            # 如果剩余时间大于 2 小时（7200 秒），跳过
+            if time_until_expiry > 7200:
+                continue
+
+            # 判断是已过期还是即将过期
+            if time_until_expiry <= 0:
+                # 已过期
+                expired_hours = abs(time_until_expiry) / 3600
+                debug_logger.log_info(
+                    f"[AUTO_ST_REFRESH] Token {token.id} (Email: {token.email}) AT 已过期 "
+                    f"{expired_hours:.1f} 小时，尝试刷新 ST..."
+                )
+            else:
+                # 即将过期
+                remaining_hours = time_until_expiry / 3600
+                debug_logger.log_info(
+                    f"[AUTO_ST_REFRESH] Token {token.id} (Email: {token.email}) AT 剩余 "
+                    f"{remaining_hours:.1f} 小时，尝试刷新 ST..."
+                )
+
+            # 尝试刷新 ST
+            try:
+                new_st = await self.flow_client.refresh_session_token(token.st, token.email)
+                if new_st:
+                    # 更新数据库中的 ST
+                    await self.db.update_token(token.id, st=new_st)
+                    debug_logger.log_info(
+                        f"[AUTO_ST_REFRESH] Token {token.id} ST 刷新成功，"
+                        f"下次使用时将自动刷新 AT"
+                    )
+                else:
+                    debug_logger.log_warning(
+                        f"[AUTO_ST_REFRESH] Token {token.id} ST 刷新失败，"
+                        f"保持原状等待下次重试"
+                    )
+            except Exception as e:
+                debug_logger.log_error(
+                    f"[AUTO_ST_REFRESH] Token {token.id} ST 刷新异常: {str(e)}"
+                )
+
     # ========== 余额刷新 ==========
 
     async def refresh_credits(self, token_id: int) -> int:

@@ -252,6 +252,86 @@ class FlowClient:
 
     # ========== 认证相关 (使用ST) ==========
 
+    async def refresh_session_token(self, old_st: str, email: str) -> Optional[str]:
+        """通过请求 Flow 页面刷新 Session Token
+
+        Args:
+            old_st: 旧的 Session Token
+            email: 用户邮箱（必传）
+
+        Returns:
+            新的 Session Token，如果失败返回 None
+        """
+        proxy_url = await self.proxy_manager.get_proxy_url()
+        refresh_url = config.flow_labs_refresh_url
+
+        # 使用旧 ST 和 email 作为 Cookie
+        headers = {
+            "Cookie": f"__Secure-next-auth.session-token={old_st}; email={email}",
+            "User-Agent": self._generate_user_agent(old_st[:16])
+        }
+
+        # 添加默认浏览器请求头
+        for key, value in self._default_client_headers.items():
+            headers.setdefault(key, value)
+
+        try:
+            async with AsyncSession() as session:
+                response = await session.get(
+                    refresh_url,
+                    headers=headers,
+                    proxy=proxy_url,
+                    timeout=self.timeout,
+                    impersonate="chrome110"
+                )
+
+                # 检查响应状态
+                if response.status_code >= 400:
+                    debug_logger.log_error(f"[ST_REFRESH] HTTP Error {response.status_code}")
+                    return None
+
+                # 从响应头中提取所有 Set-Cookie
+                set_cookie_headers = []
+
+                # 尝试使用 get_list 方法（如果支持）
+                if hasattr(response.headers, 'get_list'):
+                    set_cookie_headers = response.headers.get_list("Set-Cookie")
+                else:
+                    # 如果不支持，直接遍历 headers
+                    for key, value in response.headers.items():
+                        if key.lower() == "set-cookie":
+                            set_cookie_headers.append(value)
+
+                if not set_cookie_headers:
+                    debug_logger.log_error("[ST_REFRESH] No Set-Cookie header found")
+                    return None
+
+                print(f"[ST_REFRESH] Found {len(set_cookie_headers)} Set-Cookie headers")
+                cookie_values = set_cookie_headers
+
+                # 查找 __Secure-next-auth.session-token
+                for cookie_str in cookie_values:
+                    if "__Secure-next-auth.session-token=" in cookie_str:
+                        # 提取 token 值（格式: __Secure-next-auth.session-token=xxx; Path=/; ...)
+                        parts = cookie_str.split(";")
+                        for part in parts:
+                            part = part.strip()
+                            if part.startswith("__Secure-next-auth.session-token="):
+                                new_st = part.split("=", 1)[1]
+                                if new_st and new_st != old_st:
+                                    debug_logger.log_info("[ST_REFRESH] Successfully obtained new session token")
+                                    return new_st
+                                elif new_st == old_st:
+                                    debug_logger.log_warning("[ST_REFRESH] New ST is same as old ST")
+                                    return None
+
+                debug_logger.log_error("[ST_REFRESH] __Secure-next-auth.session-token not found in Set-Cookie")
+                return None
+
+        except Exception as e:
+            debug_logger.log_error(f"[ST_REFRESH] Request failed: {str(e)}")
+            return None
+
     async def st_to_at(self, st: str) -> dict:
         """ST转AT
 

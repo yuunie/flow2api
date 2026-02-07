@@ -401,6 +401,59 @@ async def refresh_at(
         raise HTTPException(status_code=500, detail=f"刷新AT失败: {str(e)}")
 
 
+@router.post("/api/tokens/{token_id}/refresh-st")
+async def refresh_st(
+    token_id: int,
+    token: str = Depends(verify_admin_token)
+):
+    """手动刷新Token的ST (Session Token) 🆕
+
+    通过 HTTP 请求直接访问 Flow 页面刷新 ST，支持所有模式
+    """
+    from ..core.logger import debug_logger
+
+    debug_logger.log_info(f"[API] 手动刷新 ST 请求: token_id={token_id}")
+
+    try:
+        # 获取 token 信息
+        token_obj = await token_manager.get_token(token_id)
+        if not token_obj:
+            raise HTTPException(status_code=404, detail="Token不存在")
+
+        if not token_obj.st:
+            raise HTTPException(status_code=400, detail="Token 没有 Session Token")
+
+        # 调用 flow_client 的 refresh_session_token 方法
+        new_st = await token_manager.flow_client.refresh_session_token(token_obj.st, token_obj.email)
+
+        if new_st:
+            # 更新数据库中的 ST
+            await token_manager.db.update_token(token_id, st=new_st)
+
+            # 获取更新后的token信息
+            updated_token = await token_manager.get_token(token_id)
+
+            debug_logger.log_info(f"[API] ST 刷新成功: token_id={token_id}")
+
+            return {
+                "success": True,
+                "message": "ST刷新成功",
+                "token": {
+                    "id": updated_token.id,
+                    "email": updated_token.email,
+                    "st": updated_token.st
+                }
+            }
+        else:
+            debug_logger.log_error(f"[API] ST 刷新失败: token_id={token_id}")
+            raise HTTPException(status_code=500, detail="ST刷新失败，可能是旧 ST 已失效或网络问题")
+    except HTTPException:
+        raise
+    except Exception as e:
+        debug_logger.log_error(f"[API] 刷新ST异常: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"刷新ST失败: {str(e)}")
+
+
 @router.post("/api/tokens/st2at")
 async def st_to_at(
     request: ST2ATRequest,
